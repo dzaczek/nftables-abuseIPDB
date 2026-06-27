@@ -9,8 +9,8 @@ fi
 systemctl disable --now abeiplinux.timer >/dev/null 2>&1 || true
 systemctl disable --now abeiplinux.service >/dev/null 2>&1 || true
 
-if command -v nft >/dev/null 2>&1 && nft list table inet abeiplinux_ssh >/dev/null 2>&1; then
-	nft delete table inet abeiplinux_ssh
+if command -v nft >/dev/null 2>&1 && nft list table inet abeiplinux >/dev/null 2>&1; then
+	nft delete table inet abeiplinux
 fi
 
 rm -f /etc/systemd/system/abeiplinux.service

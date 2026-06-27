@@ -1,0 +1,30 @@
+# abeiplinux rule set.
+#
+# One rule per line:  <action> <proto> <port> <geo>
+#   action : allow | deny
+#   proto  : tcp | udp
+#   port   : single port number
+#   geo    : country code(s), region name(s), comma-separated, or "any"
+#
+# How it behaves:
+#   - A port that appears in any "allow" rule becomes closed by default:
+#     only the listed sources get in, everyone else is dropped.
+#   - A port you never mention is left untouched.
+#   - "deny" rules drop a geo without closing the port for everyone else,
+#     and are evaluated before "allow" rules.
+#   - The whitelist (abeiplinux.conf) and the AbuseIPDB blacklist always
+#     apply on top, on every managed port.
+#
+# Regions are defined in abeiplinux.conf via REGION_<NAME> variables.
+# Built-in: europe, north_america, south_america, oceania. Add your own freely.
+
+# Allow SSH from Europe only.
+allow tcp 22 europe
+
+# Examples - uncomment and adapt:
+# allow tcp 5060 de            # SIP/TCP open only to Germany
+# allow udp 5060 de            # SIP/UDP open only to Germany
+# allow tcp 5061 us            # SIPS open only to the United States
+# allow tcp 443  any           # HTTPS open to the world (still abuse-filtered)
+# deny  tcp 5060 ru,cn         # block Russia and China on 5060
+# allow tcp 22   europe,us     # SSH from Europe plus the United States
