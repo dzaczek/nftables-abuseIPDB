@@ -24,7 +24,7 @@ IPDENY_V6_URL="${IPDENY_V6_URL:-https://www.ipdeny.com/ipv6/ipaddresses/aggregat
 
 # Default region macros. Referenced by name in rules.conf. Override or add your
 # own REGION_<NAME> variables in the config file.
-REGION_EUROPE="${REGION_EUROPE:-ad al am at ax az ba be bg by ch cy cz de dk ee es fi fo fr gb ge gg gi gr hr hu ie im is it je li lt lu lv mc md me mk mt nl no pl pt ro rs ru se si sk sm tr ua va xk}"
+REGION_EUROPE="${REGION_EUROPE:-ad al am at ax az ba be bg by ch cy cz de dk ee es fi fo fr gb ge gg gi gr hr hu ie im is it je li lt lu lv mc md me mk mt nl no pl pt ro rs ru se si sk sm tr ua va}"
 REGION_NORTH_AMERICA="${REGION_NORTH_AMERICA:-us ca mx bz cr gt hn ni pa sv}"
 REGION_CARIBBEAN="${REGION_CARIBBEAN:-ag ai aw bb bs bl bm bq cu cw dm do gd gp ht jm kn ky lc mf mq ms pr sx tc tt vc vg vi}"
 REGION_SOUTH_AMERICA="${REGION_SOUTH_AMERICA:-ar bo br cl co ec fk gf gy pe py sr uy ve}"
@@ -192,7 +192,9 @@ emit_norm() {
 parse_rules_file() {
 	rf="$1"
 	lineno=0
-	while IFS=" ${TAB}" read -r action dir proto port geo _rest; do
+	# The "|| [ -n ... ]" keeps the last line even when the file has no trailing
+	# newline (read returns non-zero there but still populates the fields).
+	while IFS=" ${TAB}" read -r action dir proto port geo _rest || [ -n "${action}${dir}${proto}${port}${geo}${_rest}" ]; do
 		lineno=$((lineno + 1))
 		case "$action" in ''|\#*) continue ;; esac
 
@@ -306,8 +308,11 @@ ensure_zones() {
 		elif [ -s "$v4" ]; then
 			echo "Zone refresh failed for '${cc}', using cached copy." >&2
 		else
-			echo "Cannot download zone for country '${cc}' and no cache exists; aborting to avoid lockout." >&2
-			exit 1
+			# No data (e.g. ipdeny has no zone for this code) and no cache: skip
+			# this country rather than abort. A target that ends up with no usable
+			# address at all is still caught by build_geo_sets below, which is the
+			# real guard against loading an empty allow set.
+			echo "Zone unavailable for country '${cc}' (no data, no cache); skipping it." >&2
 		fi
 	done < "${TMP_DIR}/cc.uniq"
 }
