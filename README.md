@@ -4,11 +4,13 @@
 Ubuntu. You describe, per port and direction, which countries or regions are
 allowed, and the tool builds and maintains the `nftables` rules for you:
 
-- per-port, per-direction, per-country/region allow and deny rules from a simple
-  `rules.conf` (inbound and outbound, tcp/udp/all),
+- per-direction allow/deny rules from a simple `rules.conf`: inbound, outbound,
+  and forwarded (router/gateway/VPN) traffic,
+- tcp, udp, sctp, icmp, icmpv6, esp, ah, and gre, with single ports or ranges,
 - stateful: replies to your own requests are always allowed,
 - blocks addresses from the AbuseIPDB blacklist on every managed port,
 - always allows a configurable whitelist of trusted IPs,
+- a counter on every rule, so `nft list` shows per-rule packet/byte totals,
 - downloads only the country zones your rules actually use, with a local cache,
 - refreshes the rules twice a day through a `systemd` timer,
 - validates the `nftables` file before loading it and replaces it atomically.
@@ -18,13 +20,13 @@ allowed, and the tool builds and maintains the `nftables` rules for you:
 You write rules like sentences in `/etc/abeiplinux/rules.conf`:
 
 ```text
-# action  dir  proto  port   geo
-allow      in   tcp    22     europe
-allow      in   all    5060   de
-deny       in   tcp    5060   ru,cn
-allow      in   tcp    443    any
-allow      out  tcp    443    europe,us
-allow      out  udp    53     any
+# action  dir      proto  port   geo
+allow      in       tcp    22     europe
+allow      in       icmp   -      any
+deny       in       tcp    22     ru
+allow      in       all    5060   de
+allow      out      udp    53     any
+allow      fwd-in   esp    -      europe
 ```
 
 Two simple guarantees:
@@ -140,18 +142,18 @@ recommended way to protect your own admin IP from accidental lockout.
 
 ### Regions
 
-Regions are macros that expand to a list of country codes. They are defined in
-`abeiplinux.conf` as `REGION_<NAME>` variables and referenced by their
-lowercased name in `rules.conf`:
+Regions are macros that expand to a list of country codes. The following are
+built in and need no configuration: `europe`, `north_america`, `caribbean`,
+`south_america`, `middle_east`, `asia`, `africa`, `oceania`.
+
+Override a built-in or add your own by defining a `REGION_<NAME>` variable in
+`abeiplinux.conf`; the name used in `rules.conf` is the lowercased part after
+`REGION_`:
 
 ```sh
-REGION_EUROPE="ad al am at ... ua va xk"
-REGION_NORTH_AMERICA="us ca mx"
-REGION_NORDICS="dk fi is no se"      # add your own
+REGION_EUROPE="ad al at ... ua va xk"   # e.g. a trimmed Europe without ru/by
+REGION_NORDICS="dk fi is no se"          # custom region, usable as "nordics"
 ```
-
-`REGION_NORDICS` is then usable as `nordics` in a rule. Built-in defaults:
-`europe`, `north_america`, `south_america`, `oceania`.
 
 ### Zone cache
 
@@ -176,11 +178,11 @@ systemctl status abeiplinux.service
 journalctl -u abeiplinux.service -n 100 --no-pager
 ```
 
-Active rules and cached data:
+Active rules with per-rule counters, and cached data:
 
 ```sh
 nft list table inet abeiplinux
-nft list chain inet abeiplinux input
+nft list chain inet abeiplinux input    # or output / forward
 ls /var/lib/abeiplinux/zones
 ```
 
@@ -192,36 +194,37 @@ For the example `rules.conf` above, the generated chains look like this
 ```text
 chain input {
     type filter hook input priority -100; policy accept;
-    ct state established,related accept                # replies always allowed
+    ct state established,related counter accept            # replies always allowed
 
-    ip saddr @whitelist4 accept                        # whitelist wins first
-    tcp dport { 22, 443, 5060 } ip saddr @abuse4 drop
-    udp dport { 5060 } ip saddr @abuse4 drop
+    ip saddr @whitelist4 counter accept                    # whitelist wins first
+    meta l4proto icmp ip saddr @abuse4 counter drop        # AbuseIPDB, per proto/port
+    tcp dport 22 ip saddr @abuse4 counter drop
 
-    tcp dport 5060 ip saddr @g_ru_cn4 drop             # explicit deny
+    tcp dport 22 ip saddr @g_ru4 counter drop              # explicit deny
 
-    tcp dport 22   ip saddr @g_europe4 accept          # geo allows (source)
-    tcp dport 5060 ip saddr @g_de4     accept
-    udp dport 5060 ip saddr @g_de4     accept
-    tcp dport 443  accept                              # "any"
-
-    tcp dport { 22, 5060 } drop                        # deny-by-default
+    tcp dport 22 ip saddr @g_europe4 counter accept        # geo allow (source)
+    meta l4proto icmp counter accept                       # icmp "any"
+    tcp dport 22 counter drop                              # deny-by-default
 }
 
-chain output {
-    type filter hook output priority -100; policy accept;
-    ct state established,related accept
+chain forward {
+    type filter hook forward priority -100; policy accept;
+    ct state established,related counter accept
 
-    ip daddr @whitelist4 accept
-    tcp dport { 443 } ip daddr @abuse4 drop
-    udp dport { 53 } ip daddr @abuse4 drop
+    ip saddr @whitelist4 counter accept
+    ip daddr @whitelist4 counter accept                    # both sides for routed traffic
+    meta l4proto esp ip saddr @abuse4 counter drop
+    meta l4proto esp ip daddr @abuse4 counter drop
 
-    tcp dport 443 ip daddr @g_europe_us4 accept        # geo allows (destination)
-    udp dport 53  accept                               # "any"
-
-    tcp dport { 443 } drop                             # egress deny-by-default
+    meta l4proto esp ip saddr @g_europe4 counter accept    # geo allow (source)
+    meta l4proto esp counter drop                          # deny-by-default
 }
 ```
+
+The `allow in all 5060 de` and `allow out udp 53 any` rules add the rest (a udp
+output chain and tcp+udp entries for 5060); they are left out above for brevity.
+Note the per-rule `counter` and that AbuseIPDB / deny-by-default emit one rule
+per protocol and port (so an overlapping single port and range never collide).
 
 Only chains for the directions you actually use are emitted. The table is
 replaced atomically: the generated file recreates the table in a single `nft -f`
