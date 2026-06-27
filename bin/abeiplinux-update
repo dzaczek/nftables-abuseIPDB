@@ -71,32 +71,58 @@ resolve_region() {
 	eval "printf '%s' \"\${REGION_${u}:-}\""
 }
 
-resolve_geo() {
-	# Expand a comma-separated geo spec into sorted unique country codes.
-	out=""
+add_geo_members() {
+	# $1 geosan (group key), $2 comma-separated geo spec. Each token may be a
+	# country code, a region name, a literal IPv4/IPv6 address, or an IP/mask.
+	# Members are recorded in GEO_TOKENS as "geosan<TAB>kind<TAB>value" where
+	# kind is cc (country code), v4, or v6. Returns failure on an invalid token.
+	gs="$1"
+	found=0
 	oldifs=$IFS
 	IFS=','
-	for tok in $1; do
+	for tok in $2; do
 		IFS=$oldifs
-		tok="$(printf '%s' "$tok" | tr 'A-Z' 'a-z' | tr -d '[:space:]')"
+		tok="$(printf '%s' "$tok" | tr -d '[:space:]')"
 		if [ -z "$tok" ]; then
 			IFS=','
 			continue
 		fi
-		region="$(resolve_region "$tok")"
-		if [ -n "$region" ]; then
-			out="$out $region"
-		else
-			case "$tok" in
-				[a-z][a-z]) out="$out $tok" ;;
-				*) return 1 ;;
-			esac
-		fi
+		case "$tok" in
+			*:*)
+				printf '%s' "$tok" | grep -Eiq "$IPV6_RE" || return 1
+				printf '%s\t%s\t%s\n' "$gs" v6 "$tok" >> "$GEO_TOKENS"
+				found=1
+				;;
+			*.*)
+				printf '%s' "$tok" | grep -Eq "$IPV4_RE" || return 1
+				printf '%s\t%s\t%s\n' "$gs" v4 "$tok" >> "$GEO_TOKENS"
+				found=1
+				;;
+			*)
+				lc="$(printf '%s' "$tok" | tr 'A-Z' 'a-z')"
+				region="$(resolve_region "$lc")"
+				if [ -n "$region" ]; then
+					for c in $region; do
+						printf '%s\t%s\t%s\n' "$gs" cc "$c" >> "$GEO_TOKENS"
+						echo "$c" >> "$NEEDED_CC"
+					done
+					found=1
+				else
+					case "$lc" in
+						[a-z][a-z])
+							printf '%s\t%s\t%s\n' "$gs" cc "$lc" >> "$GEO_TOKENS"
+							echo "$lc" >> "$NEEDED_CC"
+							found=1
+							;;
+						*) return 1 ;;
+					esac
+				fi
+				;;
+		esac
 		IFS=','
 	done
 	IFS=$oldifs
-	# shellcheck disable=SC2086
-	printf '%s\n' $out | sort -u | tr '\n' ' '
+	[ "$found" = 1 ]
 }
 
 valid_port() {
@@ -176,20 +202,11 @@ parse_rules() {
 		if [ "$geo" = "any" ]; then
 			geosan="any"
 		else
-			if ! countries="$(resolve_geo "$geo")"; then
-				echo "${RULES_FILE}:${lineno}: bad geo '${geo}'" >&2
-				exit 1
-			fi
-			countries="$(printf '%s' "$countries" | sed 's/^ *//; s/ *$//')"
-			if [ -z "$countries" ]; then
-				echo "${RULES_FILE}:${lineno}: geo '${geo}' resolved to nothing" >&2
-				exit 1
-			fi
 			geosan="$(sanitize_lower "$geo")"
-			printf '%s\t%s\n' "$geosan" "$countries" >> "$GEO_TOKENS"
-			for c in $countries; do
-				echo "$c" >> "$NEEDED_CC"
-			done
+			if ! add_geo_members "$geosan" "$geo"; then
+				echo "${RULES_FILE}:${lineno}: bad target '${geo}' (country, region, IP, or IP/mask)" >&2
+				exit 1
+			fi
 		fi
 
 		if [ "$proto" = "all" ]; then
@@ -205,7 +222,8 @@ parse_rules() {
 		exit 1
 	fi
 
-	awk -F'\t' '!seen[$1]++' "$GEO_TOKENS" > "$GEO_FINAL"
+	sort -u "$GEO_TOKENS" -o "$GEO_TOKENS"
+	awk -F'\t' '!seen[$1]++{print $1}' "$GEO_TOKENS" > "$GEO_FINAL"
 }
 
 zone_fresh() {
@@ -247,14 +265,20 @@ ensure_zones() {
 }
 
 build_geo_sets() {
-	while IFS="$TAB" read -r geosan countries; do
+	while read -r geosan; do
 		[ -n "$geosan" ] || continue
 		out4="${TMP_DIR}/g_${geosan}.v4"
 		out6="${TMP_DIR}/g_${geosan}.v6"
 		: > "$out4"; : > "$out6"
-		for cc in $countries; do
-			[ -f "${ZONE_DIR}/${cc}.v4" ] && cat "${ZONE_DIR}/${cc}.v4" >> "$out4"
-			[ -f "${ZONE_DIR}/${cc}.v6" ] && cat "${ZONE_DIR}/${cc}.v6" >> "$out6"
+		awk -F'\t' -v g="$geosan" '$1==g{print $2"\t"$3}' "$GEO_TOKENS" | while IFS="$TAB" read -r kind value; do
+			case "$kind" in
+				cc)
+					[ -f "${ZONE_DIR}/${value}.v4" ] && cat "${ZONE_DIR}/${value}.v4" >> "$out4"
+					[ -f "${ZONE_DIR}/${value}.v6" ] && cat "${ZONE_DIR}/${value}.v6" >> "$out6"
+					;;
+				v4) echo "$value" >> "$out4" ;;
+				v6) echo "$value" >> "$out6" ;;
+			esac
 		done
 		sort -u "$out4" -o "$out4"
 		sort -u "$out6" -o "$out6"
@@ -412,7 +436,7 @@ generate() {
 		write_addr_set "whitelist6" "ipv6_addr" "${TMP_DIR}/whitelist6.set"
 		write_addr_set "abuse4" "ipv4_addr" "${TMP_DIR}/abuse4.set"
 		write_addr_set "abuse6" "ipv6_addr" "${TMP_DIR}/abuse6.set"
-		while IFS="$TAB" read -r geosan _c; do
+		while read -r geosan; do
 			[ -n "$geosan" ] || continue
 			write_addr_set "g_${geosan}4" "ipv4_addr" "${TMP_DIR}/g_${geosan}.v4"
 			write_addr_set "g_${geosan}6" "ipv6_addr" "${TMP_DIR}/g_${geosan}.v6"

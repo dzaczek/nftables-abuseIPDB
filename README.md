@@ -6,6 +6,7 @@ allowed, and the tool builds and maintains the `nftables` rules for you:
 
 - per-direction allow/deny rules from a simple `rules.conf`: inbound, outbound,
   and forwarded (router/gateway/VPN) traffic,
+- match by country, region, or a literal IPv4/IPv6 address or subnet,
 - tcp, udp, sctp, icmp, icmpv6, esp, ah, and gre, with single ports or ranges,
 - stateful: replies to your own requests are always allowed,
 - blocks addresses from the AbuseIPDB blacklist on every managed port,
@@ -20,8 +21,9 @@ allowed, and the tool builds and maintains the `nftables` rules for you:
 You write rules like sentences in `/etc/abeiplinux/rules.conf`:
 
 ```text
-# action  dir      proto  port   geo
+# action  dir      proto  port   target
 allow      in       tcp    22     europe
+allow      in       tcp    22     203.0.113.5
 allow      in       icmp   -      any
 deny       in       tcp    22     ru
 allow      in       all    5060   de
@@ -51,8 +53,12 @@ blacklist is always dropped.
   `icmp` (IPv4 only), `icmpv6` (IPv6 only), `esp`, `ah`, `gre`.
 - `port` - a single port (`22`) or a range (`5060-5070`); use `-` for port-less
   protocols.
-- `geo` - one or more country codes (ISO 3166-1 alpha-2, lowercase), region
-  names, comma-separated, or `any`.
+- `target` - what the source/destination address is matched against: any mix of,
+  comma-separated, country codes (`pl`), region names (`europe`), literal IPv4/
+  IPv6 addresses (`203.0.113.5`, `2001:db8::1`), IPv4/IPv6 with a mask
+  (`10.0.0.0/8`, `2001:db8::/32`), or the single word `any`. Literal addresses
+  and country/region lists can be combined in one rule
+  (`allow in tcp 80 198.51.100.0/24,de`).
 
 Every generated rule carries a `counter`, so `nft list table inet abeiplinux`
 reports per-rule packet and byte totals.

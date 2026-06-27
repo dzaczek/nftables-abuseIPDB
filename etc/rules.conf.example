@@ -1,24 +1,28 @@
 # abeiplinux rule set.
 #
-# One rule per line:  <action> <dir> <proto> <port> <geo>
+# One rule per line:  <action> <dir> <proto> <port> <target>
 #   action : allow | deny
-#   dir    : in      (incoming to this host, matches source country)
-#            out     (outgoing from this host, matches destination country)
-#            fwd-in  (routed/forwarded, matches source country)
-#            fwd-out (routed/forwarded, matches destination country)
+#   dir    : in      (incoming to this host, matches the source address)
+#            out     (outgoing from this host, matches the destination address)
+#            fwd-in  (routed/forwarded, matches the source address)
+#            fwd-out (routed/forwarded, matches the destination address)
 #   proto  : tcp | udp | sctp | all   (port-based; all = tcp and udp)
 #            icmp | icmpv6 | esp | ah | gre   (no port; use "-" in the port field)
 #   port   : single port (22) or a range (5060-5070); "-" for port-less protocols
-#   geo    : country code(s), region name(s), comma-separated, or "any"
+#   target : what to match the address against - any mix of, comma-separated:
+#              country code (pl), region name (europe),
+#              literal IPv4/IPv6 address (203.0.113.5, 2001:db8::1),
+#              IPv4/IPv6 with mask (10.0.0.0/8, 2001:db8::/32),
+#            or the single word "any".
 #
 # Every generated rule carries a counter, so "nft list table inet abeiplinux"
 # shows per-rule packet and byte totals.
 #
 # How it behaves:
 #   - A port that appears in any "allow" rule (for that direction) becomes
-#     closed by default: only the listed geos get through, the rest are dropped.
+#     closed by default: only the listed targets get through, the rest dropped.
 #   - A port/direction you never mention is left untouched.
-#   - "deny" drops a geo without closing the port for everyone else, and is
+#   - "deny" drops a target without closing the port for everyone else, and is
 #     evaluated before "allow".
 #   - Replies are always allowed: each chain accepts established/related first,
 #     so inbound is permitted only as a response to a request unless an
@@ -47,3 +51,8 @@ allow in tcp 22 europe
 # allow in      icmpv6 -      any       # allow IPv6 ping/ND from anywhere
 # allow fwd-in  esp  -        europe    # IPsec/VPN: forward ESP only from Europe
 # allow fwd-in  ah   -        europe    # IPsec/VPN: forward AH only from Europe
+# allow in      tcp 22        203.0.113.5        # SSH from one admin IP
+# allow in      tcp 22        10.0.0.0/8         # SSH from an internal subnet
+# allow in      tcp 443       2001:db8::/32      # HTTPS from an IPv6 prefix
+# allow in      tcp 80        198.51.100.0/24,de # mix a subnet with a country
+# deny  in      tcp 22        192.0.2.7          # block one bad IP on SSH
