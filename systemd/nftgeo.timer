@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily update of abeiplinux nftables SSH rules
+Description=Daily update of nftgeo nftables SSH rules
 
 [Timer]
 OnBootSec=2min

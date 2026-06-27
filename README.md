@@ -1,6 +1,6 @@
-# abeiplinux
+# nftgeo
 
-`abeiplinux` is a small declarative geo firewall for `nftables` on Debian and
+`nftgeo` is a small declarative geo firewall for `nftables` on Debian and
 Ubuntu. You describe, per port and direction, which countries or regions are
 allowed, and the tool builds and maintains the `nftables` rules for you:
 
@@ -18,7 +18,7 @@ allowed, and the tool builds and maintains the `nftables` rules for you:
 
 ## The model
 
-You write rules like sentences in `/etc/abeiplinux/rules.conf`:
+You write rules like sentences in `/etc/nftgeo/rules.conf`:
 
 ```text
 # action  dir      proto  port   target
@@ -70,7 +70,7 @@ GROUP_PARTNERS="de fr 192.0.2.0/24"
 
 Groups cannot reference other groups.
 
-Every generated rule carries a `counter`, so `nft list table inet abeiplinux`
+Every generated rule carries a `counter`, so `nft list table inet nftgeo`
 reports per-rule packet and byte totals.
 
 `in`/`out` build the `input`/`output` chains; `fwd-in`/`fwd-out` build the
@@ -103,25 +103,25 @@ Without an AbuseIPDB key the script still works; the AbuseIPDB sets stay empty.
 ## Installation
 
 ```sh
-cd /root/abeiplinux
+cd /root/nftgeo
 sudo ./install.sh
 ```
 
 The installer:
 
 - installs `curl`, `nftables`, and `ca-certificates`,
-- copies the script to `/usr/local/sbin/abeiplinux-update`,
-- creates `/etc/abeiplinux/config` and `/etc/abeiplinux/rules.conf`, plus empty
+- copies the script to `/usr/local/sbin/nftgeo-update`,
+- creates `/etc/nftgeo/config` and `/etc/nftgeo/rules.conf`, plus empty
   `rules.d/` and `groups.d/` directories for drop-in files,
-- installs `abeiplinux.service` and `abeiplinux.timer`,
+- installs `nftgeo.service` and `nftgeo.timer`,
 - enables the service at boot and the twice-daily timer.
 
 ## Configuration
 
-Everything lives in `/etc/abeiplinux`:
+Everything lives in `/etc/nftgeo`:
 
 ```text
-/etc/abeiplinux/
+/etc/nftgeo/
   config            # settings: AbuseIPDB key, WHITELIST, ZONE_CACHE_HOURS, regions, groups
   rules.conf        # rules (optional if you only use rules.d)
   rules.d/*.conf    # rule fragments, included in sorted filename order
@@ -143,7 +143,7 @@ rules never conflict; the file order only affects how the rules read in
 After editing any file, apply the changes:
 
 ```sh
-sudo systemctl start abeiplinux.service
+sudo systemctl start nftgeo.service
 ```
 
 ### AbuseIPDB
@@ -199,24 +199,24 @@ Downloaded country zones are reused for this many hours before being refreshed.
 ## Manual run
 
 ```sh
-sudo /usr/local/sbin/abeiplinux-update
+sudo /usr/local/sbin/nftgeo-update
 ```
 
 ## Status checks
 
 ```sh
-systemctl status abeiplinux.timer
-systemctl list-timers --all abeiplinux.timer
-systemctl status abeiplinux.service
-journalctl -u abeiplinux.service -n 100 --no-pager
+systemctl status nftgeo.timer
+systemctl list-timers --all nftgeo.timer
+systemctl status nftgeo.service
+journalctl -u nftgeo.service -n 100 --no-pager
 ```
 
 Active rules with per-rule counters, and cached data:
 
 ```sh
-nft list table inet abeiplinux
-nft list chain inet abeiplinux input    # or output / forward
-ls /var/lib/abeiplinux/zones
+nft list table inet nftgeo
+nft list chain inet nftgeo input    # or output / forward
+ls /var/lib/nftgeo/zones
 ```
 
 ## How the rules are built
@@ -301,19 +301,19 @@ shortens the staleness window (so IP allocations that migrate between countries
 are picked up faster) and means a single failed run does not leave you a full day
 out of date. The `ZONE_CACHE_HOURS` setting keeps the second daily run from
 re-downloading what the first one already fetched. To change the cadence, edit
-`OnCalendar=` in `/etc/systemd/system/abeiplinux.timer` and run
+`OnCalendar=` in `/etc/systemd/system/nftgeo.timer` and run
 `systemctl daemon-reload`.
 
 ## Uninstall
 
 ```sh
-cd /root/abeiplinux
+cd /root/nftgeo
 sudo ./uninstall.sh
 ```
 
 Removes the active `nftables` table, the systemd units, the script, and
-`/etc/nftables.d/abeiplinux.nft`. Leaves `/etc/abeiplinux` and
-`/var/lib/abeiplinux` in place.
+`/etc/nftables.d/nftgeo.nft`. Leaves `/etc/nftgeo` and
+`/var/lib/nftgeo` in place.
 
 ## Data sources
 
@@ -322,5 +322,5 @@ Removes the active `nftables` table, the systemd units, the script, and
 
 ## Notes
 
-`abeiplinux` only touches the ports listed in `rules.conf`. It does not set a
+`nftgeo` only touches the ports listed in `rules.conf`. It does not set a
 default `DROP` policy for the whole system and does not close other ports.

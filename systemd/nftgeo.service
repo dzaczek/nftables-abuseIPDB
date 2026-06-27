@@ -5,7 +5,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/abeiplinux-update
+ExecStart=/usr/local/sbin/nftgeo-update
 
 [Install]
 WantedBy=multi-user.target

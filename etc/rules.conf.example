@@ -1,4 +1,4 @@
-# abeiplinux rule set.
+# nftgeo rule set.
 #
 # One rule per line:  <action> <dir> <proto> <port> <target>
 #   action : allow | deny
@@ -17,7 +17,7 @@
 #                name, e.g. office),
 #            or the single word "any".
 #
-# Every generated rule carries a counter, so "nft list table inet abeiplinux"
+# Every generated rule carries a counter, so "nft list table inet nftgeo"
 # shows per-rule packet and byte totals.
 #
 # How it behaves:

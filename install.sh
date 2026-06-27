@@ -16,30 +16,30 @@ fi
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y curl nftables ca-certificates
 
-install -d -m 0755 /etc/abeiplinux /etc/abeiplinux/rules.d /etc/abeiplinux/groups.d \
-	/etc/nftables.d /var/lib/abeiplinux /var/lib/abeiplinux/zones /usr/local/sbin
-install -m 0755 "${BASE_DIR}/bin/abeiplinux-update" /usr/local/sbin/abeiplinux-update
+install -d -m 0755 /etc/nftgeo /etc/nftgeo/rules.d /etc/nftgeo/groups.d \
+	/etc/nftables.d /var/lib/nftgeo /var/lib/nftgeo/zones /usr/local/sbin
+install -m 0755 "${BASE_DIR}/bin/nftgeo-update" /usr/local/sbin/nftgeo-update
 
-if [ ! -f /etc/abeiplinux/config ]; then
-	install -m 0600 "${BASE_DIR}/etc/config.example" /etc/abeiplinux/config
+if [ ! -f /etc/nftgeo/config ]; then
+	install -m 0600 "${BASE_DIR}/etc/config.example" /etc/nftgeo/config
 else
-	echo "Keeping existing /etc/abeiplinux/config"
+	echo "Keeping existing /etc/nftgeo/config"
 fi
 
-if [ ! -f /etc/abeiplinux/rules.conf ]; then
-	install -m 0644 "${BASE_DIR}/etc/rules.conf.example" /etc/abeiplinux/rules.conf
+if [ ! -f /etc/nftgeo/rules.conf ]; then
+	install -m 0644 "${BASE_DIR}/etc/rules.conf.example" /etc/nftgeo/rules.conf
 else
-	echo "Keeping existing /etc/abeiplinux/rules.conf"
+	echo "Keeping existing /etc/nftgeo/rules.conf"
 fi
 
-install -m 0644 "${BASE_DIR}/systemd/abeiplinux.service" /etc/systemd/system/abeiplinux.service
-install -m 0644 "${BASE_DIR}/systemd/abeiplinux.timer" /etc/systemd/system/abeiplinux.timer
+install -m 0644 "${BASE_DIR}/systemd/nftgeo.service" /etc/systemd/system/nftgeo.service
+install -m 0644 "${BASE_DIR}/systemd/nftgeo.timer" /etc/systemd/system/nftgeo.timer
 
 systemctl daemon-reload
-systemctl enable abeiplinux.service
-systemctl enable --now abeiplinux.timer
+systemctl enable nftgeo.service
+systemctl enable --now nftgeo.timer
 
-echo "Installed abeiplinux."
-echo "Edit /etc/abeiplinux/config (ABUSEIPDB_API_KEY, WHITELIST, regions, groups)"
-echo "and /etc/abeiplinux/rules.conf or /etc/abeiplinux/rules.d/*.conf, then run:"
-echo "  systemctl start abeiplinux.service"
+echo "Installed nftgeo."
+echo "Edit /etc/nftgeo/config (ABUSEIPDB_API_KEY, WHITELIST, regions, groups)"
+echo "and /etc/nftgeo/rules.conf or /etc/nftgeo/rules.d/*.conf, then run:"
+echo "  systemctl start nftgeo.service"

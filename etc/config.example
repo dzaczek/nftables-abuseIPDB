@@ -1,5 +1,5 @@
 # AbuseIPDB API key. Create one in the AbuseIPDB account panel.
-# Without this key, abeiplinux still builds the geo rules, but the AbuseIPDB
+# Without this key, nftgeo still builds the geo rules, but the AbuseIPDB
 # sets stay empty.
 ABUSEIPDB_API_KEY=""
 

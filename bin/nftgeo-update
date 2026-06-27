@@ -1,15 +1,15 @@
 #!/bin/sh
 set -eu
 
-CONFIG_FILE="${CONFIG_FILE:-/etc/abeiplinux/config}"
-RULES_FILE="${RULES_FILE:-/etc/abeiplinux/rules.conf}"
-RULES_DIR="${RULES_DIR:-/etc/abeiplinux/rules.d}"
-GROUPS_DIR="${GROUPS_DIR:-/etc/abeiplinux/groups.d}"
-STATE_DIR="${STATE_DIR:-/var/lib/abeiplinux}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/nftgeo/config}"
+RULES_FILE="${RULES_FILE:-/etc/nftgeo/rules.conf}"
+RULES_DIR="${RULES_DIR:-/etc/nftgeo/rules.d}"
+GROUPS_DIR="${GROUPS_DIR:-/etc/nftgeo/groups.d}"
+STATE_DIR="${STATE_DIR:-/var/lib/nftgeo}"
 ZONE_DIR="${ZONE_DIR:-${STATE_DIR}/zones}"
-NFT_FILE="${NFT_FILE:-/etc/nftables.d/abeiplinux.nft}"
+NFT_FILE="${NFT_FILE:-/etc/nftables.d/nftgeo.nft}"
 TABLE_FAMILY="${TABLE_FAMILY:-inet}"
-TABLE_NAME="${TABLE_NAME:-abeiplinux}"
+TABLE_NAME="${TABLE_NAME:-nftgeo}"
 WHITELIST="${WHITELIST:-}"
 ZONE_CACHE_HOURS="${ZONE_CACHE_HOURS:-20}"
 
@@ -495,7 +495,7 @@ generate() {
 		emit_chain "forward" "saddr daddr"
 
 		printf '}\n'
-	} > "${TMP_DIR}/abeiplinux.nft"
+	} > "${TMP_DIR}/nftgeo.nft"
 }
 
 parse_rules
@@ -505,8 +505,8 @@ fetch_abuseipdb
 build_whitelist
 generate
 
-nft -c -f "${TMP_DIR}/abeiplinux.nft"
-install -m 0644 "${TMP_DIR}/abeiplinux.nft" "$NFT_FILE"
+nft -c -f "${TMP_DIR}/nftgeo.nft"
+install -m 0644 "${TMP_DIR}/nftgeo.nft" "$NFT_FILE"
 nft -f "$NFT_FILE"
 
 install -m 0644 "${TMP_DIR}/whitelist4.set" "${STATE_DIR}/whitelist4.set"
