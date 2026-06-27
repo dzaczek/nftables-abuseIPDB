@@ -6,9 +6,13 @@
 #            out     (outgoing from this host, matches destination country)
 #            fwd-in  (routed/forwarded, matches source country)
 #            fwd-out (routed/forwarded, matches destination country)
-#   proto  : tcp | udp | all   (all = both tcp and udp)
-#   port   : single port (22) or a range (5060-5070)
+#   proto  : tcp | udp | sctp | all   (port-based; all = tcp and udp)
+#            icmp | icmpv6 | esp | ah | gre   (no port; use "-" in the port field)
+#   port   : single port (22) or a range (5060-5070); "-" for port-less protocols
 #   geo    : country code(s), region name(s), comma-separated, or "any"
+#
+# Every generated rule carries a counter, so "nft list table inet abeiplinux"
+# shows per-rule packet and byte totals.
 #
 # How it behaves:
 #   - A port that appears in any "allow" rule (for that direction) becomes
@@ -39,3 +43,7 @@ allow in tcp 22 europe
 # allow out     udp 53        any       # allow outbound DNS anywhere
 # allow fwd-in  tcp 443       europe    # gateway: forward inbound 443 only from Europe
 # allow fwd-out tcp 80        any       # gateway: let the LAN browse out on port 80
+# allow in      icmp -        any       # allow IPv4 ping from anywhere
+# allow in      icmpv6 -      any       # allow IPv6 ping/ND from anywhere
+# allow fwd-in  esp  -        europe    # IPsec/VPN: forward ESP only from Europe
+# allow fwd-in  ah   -        europe    # IPsec/VPN: forward AH only from Europe

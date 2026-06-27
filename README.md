@@ -45,10 +45,15 @@ blacklist is always dropped.
   - `out` - outgoing from this host (matches the destination country),
   - `fwd-in` - routed/forwarded traffic, matched by source country,
   - `fwd-out` - routed/forwarded traffic, matched by destination country.
-- `proto` - `tcp`, `udp`, or `all` (both).
-- `port` - a single port (`22`) or a range (`5060-5070`).
+- `proto` - port-based: `tcp`, `udp`, `sctp`, or `all` (tcp and udp). Port-less:
+  `icmp` (IPv4 only), `icmpv6` (IPv6 only), `esp`, `ah`, `gre`.
+- `port` - a single port (`22`) or a range (`5060-5070`); use `-` for port-less
+  protocols.
 - `geo` - one or more country codes (ISO 3166-1 alpha-2, lowercase), region
   names, comma-separated, or `any`.
+
+Every generated rule carries a `counter`, so `nft list table inet abeiplinux`
+reports per-rule packet and byte totals.
 
 `in`/`out` build the `input`/`output` chains; `fwd-in`/`fwd-out` build the
 `forward` chain and are what you use when the host is a router, gateway, or VPN

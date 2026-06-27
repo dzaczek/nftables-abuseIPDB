@@ -113,6 +113,17 @@ valid_port() {
 	esac
 }
 
+l4_match() {
+	# $1 proto, $2 port, $3 family (4|6). Echo the protocol/port match clause for
+	# that family, or nothing if the protocol does not apply to that family.
+	case "$1" in
+		tcp|udp|sctp) printf '%s dport %s' "$1" "$2" ;;
+		esp|ah|gre)   printf 'meta l4proto %s' "$1" ;;
+		icmp)   [ "$3" = 4 ] && printf 'meta l4proto icmp' || true ;;
+		icmpv6) [ "$3" = 6 ] && printf 'meta l4proto icmpv6' || true ;;
+	esac
+}
+
 emit_norm() {
 	# action hook side proto port geosan
 	printf '%s %s %s %s %s %s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$RULES_NORM"
@@ -140,13 +151,23 @@ parse_rules() {
 			*) echo "${RULES_FILE}:${lineno}: bad direction '${dir}' (use in|out|fwd-in|fwd-out)" >&2; exit 1 ;;
 		esac
 		case "$proto" in
-			tcp|udp|all) ;;
-			*) echo "${RULES_FILE}:${lineno}: bad proto '${proto}' (use tcp|udp|all)" >&2; exit 1 ;;
+			tcp|udp|sctp|all)
+				if ! valid_port "$port"; then
+					echo "${RULES_FILE}:${lineno}: bad port '${port}' (use N or N-M, 1-65535)" >&2
+					exit 1
+				fi
+				;;
+			icmp|icmpv6|esp|ah|gre)
+				case "$port" in
+					-|any) port=- ;;
+					*) echo "${RULES_FILE}:${lineno}: proto '${proto}' takes no port (use -)" >&2; exit 1 ;;
+				esac
+				;;
+			*)
+				echo "${RULES_FILE}:${lineno}: bad proto '${proto}' (tcp|udp|sctp|all|icmp|icmpv6|esp|ah|gre)" >&2
+				exit 1
+				;;
 		esac
-		if ! valid_port "$port"; then
-			echo "${RULES_FILE}:${lineno}: bad port '${port}' (use N or N-M, 1-65535)" >&2
-			exit 1
-		fi
 		if [ -z "$geo" ]; then
 			echo "${RULES_FILE}:${lineno}: missing geo" >&2
 			exit 1
@@ -313,46 +334,66 @@ emit_chain() {
 	printf '\tchain %s {\n' "$hook"
 	printf '\t\ttype filter hook %s priority -100; policy accept;\n' "$hook"
 	# Stateful: replies to connections you initiated are always allowed.
-	printf '\t\tct state established,related accept\n'
+	printf '\t\tct state established,related counter accept\n'
 
 	# Whitelist always wins on every managed port.
 	for s in $sides; do
-		[ -s "${TMP_DIR}/whitelist4.set" ] && printf '\t\tip %s @whitelist4 accept\n' "$s"
-		[ -s "${TMP_DIR}/whitelist6.set" ] && printf '\t\tip6 %s @whitelist6 accept\n' "$s"
+		[ -s "${TMP_DIR}/whitelist4.set" ] && printf '\t\tip %s @whitelist4 counter accept\n' "$s"
+		[ -s "${TMP_DIR}/whitelist6.set" ] && printf '\t\tip6 %s @whitelist6 counter accept\n' "$s"
 	done
 
-	# AbuseIPDB blacklist drop on every managed port. One rule per unique port
-	# (single ports and ranges may overlap, which an anonymous set rejects).
-	for pr in tcp udp; do
+	# AbuseIPDB blacklist drop on every managed protocol/port. One rule per
+	# unique proto/port (single ports and ranges may overlap, which an anonymous
+	# set would reject).
+	for pr in $(awk -v h="$hook" '$2==h{print $4}' "$RULES_NORM" | sort -u); do
 		for port in $(awk -v h="$hook" -v p="$pr" '$2==h && $4==p{print $5}' "$RULES_NORM" | sort -u); do
+			m4="$(l4_match "$pr" "$port" 4)"
+			m6="$(l4_match "$pr" "$port" 6)"
 			for s in $sides; do
-				printf '\t\t%s dport %s ip %s @abuse4 drop\n' "$pr" "$port" "$s"
-				printf '\t\t%s dport %s ip6 %s @abuse6 drop\n' "$pr" "$port" "$s"
+				[ -n "$m4" ] && printf '\t\t%s ip %s @abuse4 counter drop\n' "$m4" "$s"
+				[ -n "$m6" ] && printf '\t\t%s ip6 %s @abuse6 counter drop\n' "$m6" "$s"
 			done
 		done
 	done
 
 	# Explicit geo blocks, before the allows.
 	awk -v h="$hook" '$1=="deny" && $2==h' "$RULES_NORM" | while read -r _a _h side proto port geosan; do
-		printf '\t\t%s dport %s ip %s @g_%s4 drop\n' "$proto" "$port" "$side" "$geosan"
-		printf '\t\t%s dport %s ip6 %s @g_%s6 drop\n' "$proto" "$port" "$side" "$geosan"
+		m4="$(l4_match "$proto" "$port" 4)"
+		m6="$(l4_match "$proto" "$port" 6)"
+		[ -n "$m4" ] && printf '\t\t%s ip %s @g_%s4 counter drop\n' "$m4" "$side" "$geosan"
+		[ -n "$m6" ] && printf '\t\t%s ip6 %s @g_%s6 counter drop\n' "$m6" "$side" "$geosan"
 	done
 
 	# Geo allows.
 	awk -v h="$hook" '$1=="allow" && $2==h' "$RULES_NORM" | while read -r _a _h side proto port geosan; do
+		m4="$(l4_match "$proto" "$port" 4)"
+		m6="$(l4_match "$proto" "$port" 6)"
 		if [ "$geosan" = "any" ]; then
-			printf '\t\t%s dport %s accept\n' "$proto" "$port"
+			printed=""
+			for m in "$m4" "$m6"; do
+				[ -n "$m" ] || continue
+				case "$printed" in *"|${m}|"*) continue ;; esac
+				printed="${printed}|${m}|"
+				printf '\t\t%s counter accept\n' "$m"
+			done
 		else
-			printf '\t\t%s dport %s ip %s @g_%s4 accept\n' "$proto" "$port" "$side" "$geosan"
-			printf '\t\t%s dport %s ip6 %s @g_%s6 accept\n' "$proto" "$port" "$side" "$geosan"
+			[ -n "$m4" ] && printf '\t\t%s ip %s @g_%s4 counter accept\n' "$m4" "$side" "$geosan"
+			[ -n "$m6" ] && printf '\t\t%s ip6 %s @g_%s6 counter accept\n' "$m6" "$side" "$geosan"
 		fi
 	done
 
 	# Deny-by-default for geo-fenced ports (an allow rule, geo != any).
-	# One rule per unique port, for the same overlap reason as above.
-	for pr in tcp udp; do
+	for pr in $(awk -v h="$hook" '$1=="allow" && $2==h && $6!="any"{print $4}' "$RULES_NORM" | sort -u); do
 		for port in $(awk -v h="$hook" -v p="$pr" '$1=="allow" && $2==h && $4==p && $6!="any"{print $5}' "$RULES_NORM" | sort -u); do
-			printf '\t\t%s dport %s drop\n' "$pr" "$port"
+			m4="$(l4_match "$pr" "$port" 4)"
+			m6="$(l4_match "$pr" "$port" 6)"
+			printed=""
+			for m in "$m4" "$m6"; do
+				[ -n "$m" ] || continue
+				case "$printed" in *"|${m}|"*) continue ;; esac
+				printed="${printed}|${m}|"
+				printf '\t\t%s counter drop\n' "$m"
+			done
 		done
 	done
 
