@@ -13,6 +13,8 @@
 #              country code (pl), region name (europe),
 #              literal IPv4/IPv6 address (203.0.113.5, 2001:db8::1),
 #              IPv4/IPv6 with mask (10.0.0.0/8, 2001:db8::/32),
+#              a named GROUP_<NAME> from abeiplinux.conf (used as its lowercase
+#                name, e.g. office),
 #            or the single word "any".
 #
 # Every generated rule carries a counter, so "nft list table inet abeiplinux"
@@ -56,3 +58,5 @@ allow in tcp 22 europe
 # allow in      tcp 443       2001:db8::/32      # HTTPS from an IPv6 prefix
 # allow in      tcp 80        198.51.100.0/24,de # mix a subnet with a country
 # deny  in      tcp 22        192.0.2.7          # block one bad IP on SSH
+# allow in      tcp 22        office             # a GROUP_OFFICE list from the config
+# allow in      tcp 443       office,europe      # mix a group with a region

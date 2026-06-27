@@ -56,9 +56,19 @@ blacklist is always dropped.
 - `target` - what the source/destination address is matched against: any mix of,
   comma-separated, country codes (`pl`), region names (`europe`), literal IPv4/
   IPv6 addresses (`203.0.113.5`, `2001:db8::1`), IPv4/IPv6 with a mask
-  (`10.0.0.0/8`, `2001:db8::/32`), or the single word `any`. Literal addresses
-  and country/region lists can be combined in one rule
-  (`allow in tcp 80 198.51.100.0/24,de`).
+  (`10.0.0.0/8`, `2001:db8::/32`), a named `GROUP_<NAME>` list from the config
+  (used by its lowercase name, e.g. `office`), or the single word `any`. These
+  can be combined in one rule (`allow in tcp 80 198.51.100.0/24,de,office`).
+
+Define reusable address groups in `abeiplinux.conf` as `GROUP_<NAME>` variables;
+a group may itself mix IPs, subnets, country codes, and region names:
+
+```sh
+GROUP_OFFICE="203.0.113.5 198.51.100.0/24 2001:db8:1::/48"
+GROUP_PARTNERS="de fr 192.0.2.0/24"
+```
+
+Groups cannot reference other groups.
 
 Every generated rule carries a `counter`, so `nft list table inet abeiplinux`
 reports per-rule packet and byte totals.

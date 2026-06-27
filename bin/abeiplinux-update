@@ -71,11 +71,54 @@ resolve_region() {
 	eval "printf '%s' \"\${REGION_${u}:-}\""
 }
 
+resolve_group() {
+	u="$(printf '%s' "$1" | tr 'a-z' 'A-Z' | tr -cs 'A-Z0-9_' '_')"
+	eval "printf '%s' \"\${GROUP_${u}:-}\""
+}
+
+add_one_member() {
+	# $1 geosan, $2 single token: literal IPv4/IPv6 (with optional mask),
+	# country code, or region name. Records it in GEO_TOKENS (+ NEEDED_CC for
+	# countries). Returns failure if the token is none of these.
+	case "$2" in
+		*:*)
+			printf '%s' "$2" | grep -Eiq "$IPV6_RE" || return 1
+			printf '%s\t%s\t%s\n' "$1" v6 "$2" >> "$GEO_TOKENS"
+			return 0
+			;;
+		*.*)
+			printf '%s' "$2" | grep -Eq "$IPV4_RE" || return 1
+			printf '%s\t%s\t%s\n' "$1" v4 "$2" >> "$GEO_TOKENS"
+			return 0
+			;;
+	esac
+	mlc="$(printf '%s' "$2" | tr 'A-Z' 'a-z')"
+	mregion="$(resolve_region "$mlc")"
+	if [ -n "$mregion" ]; then
+		for mc in $mregion; do
+			printf '%s\t%s\t%s\n' "$1" cc "$mc" >> "$GEO_TOKENS"
+			echo "$mc" >> "$NEEDED_CC"
+		done
+		return 0
+	fi
+	case "$mlc" in
+		[a-z][a-z])
+			printf '%s\t%s\t%s\n' "$1" cc "$mlc" >> "$GEO_TOKENS"
+			echo "$mlc" >> "$NEEDED_CC"
+			return 0
+			;;
+	esac
+	return 1
+}
+
 add_geo_members() {
-	# $1 geosan (group key), $2 comma-separated geo spec. Each token may be a
-	# country code, a region name, a literal IPv4/IPv6 address, or an IP/mask.
-	# Members are recorded in GEO_TOKENS as "geosan<TAB>kind<TAB>value" where
-	# kind is cc (country code), v4, or v6. Returns failure on an invalid token.
+	# $1 geosan (group key), $2 comma-separated target spec. Each token may be a
+	# literal IPv4/IPv6 address or subnet, a country code, a region name, or the
+	# name of a GROUP_<NAME> list defined in the config (which expands to any mix
+	# of IPs, countries, and regions). Members are recorded in GEO_TOKENS as
+	# "geosan<TAB>kind<TAB>value" (kind = cc | v4 | v6). A GROUP_/REGION_ name
+	# takes precedence over a country code of the same name. Returns failure on an
+	# invalid token.
 	gs="$1"
 	found=0
 	oldifs=$IFS
@@ -88,34 +131,20 @@ add_geo_members() {
 			continue
 		fi
 		case "$tok" in
-			*:*)
-				printf '%s' "$tok" | grep -Eiq "$IPV6_RE" || return 1
-				printf '%s\t%s\t%s\n' "$gs" v6 "$tok" >> "$GEO_TOKENS"
-				found=1
-				;;
-			*.*)
-				printf '%s' "$tok" | grep -Eq "$IPV4_RE" || return 1
-				printf '%s\t%s\t%s\n' "$gs" v4 "$tok" >> "$GEO_TOKENS"
+			*:*|*.*)
+				add_one_member "$gs" "$tok" || return 1
 				found=1
 				;;
 			*)
-				lc="$(printf '%s' "$tok" | tr 'A-Z' 'a-z')"
-				region="$(resolve_region "$lc")"
-				if [ -n "$region" ]; then
-					for c in $region; do
-						printf '%s\t%s\t%s\n' "$gs" cc "$c" >> "$GEO_TOKENS"
-						echo "$c" >> "$NEEDED_CC"
+				grp="$(resolve_group "$tok")"
+				if [ -n "$grp" ]; then
+					for m in $(printf '%s' "$grp" | tr ',' ' '); do
+						add_one_member "$gs" "$m" || { echo "group '${tok}' has invalid member '${m}'" >&2; return 1; }
+						found=1
 					done
-					found=1
 				else
-					case "$lc" in
-						[a-z][a-z])
-							printf '%s\t%s\t%s\n' "$gs" cc "$lc" >> "$GEO_TOKENS"
-							echo "$lc" >> "$NEEDED_CC"
-							found=1
-							;;
-						*) return 1 ;;
-					esac
+					add_one_member "$gs" "$tok" || return 1
+					found=1
 				fi
 				;;
 		esac
