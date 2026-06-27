@@ -2,10 +2,12 @@
 #
 # One rule per line:  <action> <dir> <proto> <port> <geo>
 #   action : allow | deny
-#   dir    : in  (incoming, matches source country)
-#            out (outgoing, matches destination country)
+#   dir    : in      (incoming to this host, matches source country)
+#            out     (outgoing from this host, matches destination country)
+#            fwd-in  (routed/forwarded, matches source country)
+#            fwd-out (routed/forwarded, matches destination country)
 #   proto  : tcp | udp | all   (all = both tcp and udp)
-#   port   : single port number
+#   port   : single port (22) or a range (5060-5070)
 #   geo    : country code(s), region name(s), comma-separated, or "any"
 #
 # How it behaves:
@@ -29,10 +31,11 @@
 allow in tcp 22 europe
 
 # Examples - uncomment and adapt:
-# allow in  tcp 5060 de            # SIP/TCP reachable only from Germany
-# allow in  all 5060 de            # SIP over TCP and UDP from Germany
-# allow in  tcp 5061 us            # SIPS reachable only from the US
-# allow in  tcp 443  any           # HTTPS open to the world (still abuse-filtered)
-# deny  in  tcp 5060 ru,cn         # block Russia and China on inbound 5060
-# allow out tcp 443  europe,us     # only allow outbound HTTPS to Europe and US
-# allow out udp 53   any           # allow outbound DNS anywhere
+# allow in      all 5060-5070 de       # SIP (tcp+udp) port range, only from Germany
+# allow in      tcp 5061      us        # SIPS reachable only from the US
+# allow in      tcp 443       any       # HTTPS open to the world (still abuse-filtered)
+# deny  in      tcp 5060      ru,cn     # block Russia and China on inbound 5060
+# allow out     tcp 443       europe,us # only allow outbound HTTPS to Europe and US
+# allow out     udp 53        any       # allow outbound DNS anywhere
+# allow fwd-in  tcp 443       europe    # gateway: forward inbound 443 only from Europe
+# allow fwd-out tcp 80        any       # gateway: let the LAN browse out on port 80

@@ -40,12 +40,19 @@ blacklist is always dropped.
 
 - `action` - `allow` or `deny`. `deny` drops a geo without closing the port for
   everyone else, and is evaluated before `allow`.
-- `dir` - `in` (incoming, matches the source country) or `out` (outgoing,
-  matches the destination country).
+- `dir` - one of:
+  - `in` - incoming to this host (matches the source country),
+  - `out` - outgoing from this host (matches the destination country),
+  - `fwd-in` - routed/forwarded traffic, matched by source country,
+  - `fwd-out` - routed/forwarded traffic, matched by destination country.
 - `proto` - `tcp`, `udp`, or `all` (both).
-- `port` - a single port number.
+- `port` - a single port (`22`) or a range (`5060-5070`).
 - `geo` - one or more country codes (ISO 3166-1 alpha-2, lowercase), region
   names, comma-separated, or `any`.
+
+`in`/`out` build the `input`/`output` chains; `fwd-in`/`fwd-out` build the
+`forward` chain and are what you use when the host is a router, gateway, or VPN
+endpoint passing traffic between networks.
 
 ### Replies and "inbound only as a response"
 
