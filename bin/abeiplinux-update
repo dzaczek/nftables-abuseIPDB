@@ -1,8 +1,10 @@
 #!/bin/sh
 set -eu
 
-CONFIG_FILE="${CONFIG_FILE:-/etc/abeiplinux/abeiplinux.conf}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/abeiplinux/config}"
 RULES_FILE="${RULES_FILE:-/etc/abeiplinux/rules.conf}"
+RULES_DIR="${RULES_DIR:-/etc/abeiplinux/rules.d}"
+GROUPS_DIR="${GROUPS_DIR:-/etc/abeiplinux/groups.d}"
 STATE_DIR="${STATE_DIR:-/var/lib/abeiplinux}"
 ZONE_DIR="${ZONE_DIR:-${STATE_DIR}/zones}"
 NFT_FILE="${NFT_FILE:-/etc/nftables.d/abeiplinux.nft}"
@@ -46,9 +48,12 @@ if [ -r "$CONFIG_FILE" ]; then
 	. "$CONFIG_FILE"
 fi
 
-if [ ! -r "$RULES_FILE" ]; then
-	echo "Rules file not found: ${RULES_FILE}" >&2
-	exit 1
+# Group/region definitions can also live in drop-in files. Sourced after the
+# main config, in sorted filename order (last definition of a variable wins).
+if [ -d "$GROUPS_DIR" ]; then
+	for _gf in "$GROUPS_DIR"/*.conf; do
+		[ -r "$_gf" ] && . "$_gf"
+	done
 fi
 
 mkdir -p "$STATE_DIR" "$ZONE_DIR" "$(dirname "$NFT_FILE")"
@@ -184,11 +189,8 @@ emit_norm() {
 	printf '%s %s %s %s %s %s\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$RULES_NORM"
 }
 
-parse_rules() {
-	: > "$RULES_NORM"
-	: > "$GEO_TOKENS"
-	: > "$NEEDED_CC"
-
+parse_rules_file() {
+	rf="$1"
 	lineno=0
 	while IFS=" ${TAB}" read -r action dir proto port geo _rest; do
 		lineno=$((lineno + 1))
@@ -196,35 +198,35 @@ parse_rules() {
 
 		case "$action" in
 			allow|deny) ;;
-			*) echo "${RULES_FILE}:${lineno}: bad action '${action}'" >&2; exit 1 ;;
+			*) echo "${rf}:${lineno}: bad action '${action}'" >&2; exit 1 ;;
 		esac
 		case "$dir" in
 			in)      hook=input;   side=saddr ;;
 			out)     hook=output;  side=daddr ;;
 			fwd-in)  hook=forward;  side=saddr ;;
 			fwd-out) hook=forward;  side=daddr ;;
-			*) echo "${RULES_FILE}:${lineno}: bad direction '${dir}' (use in|out|fwd-in|fwd-out)" >&2; exit 1 ;;
+			*) echo "${rf}:${lineno}: bad direction '${dir}' (use in|out|fwd-in|fwd-out)" >&2; exit 1 ;;
 		esac
 		case "$proto" in
 			tcp|udp|sctp|all)
 				if ! valid_port "$port"; then
-					echo "${RULES_FILE}:${lineno}: bad port '${port}' (use N or N-M, 1-65535)" >&2
+					echo "${rf}:${lineno}: bad port '${port}' (use N or N-M, 1-65535)" >&2
 					exit 1
 				fi
 				;;
 			icmp|icmpv6|esp|ah|gre)
 				case "$port" in
 					-|any) port=- ;;
-					*) echo "${RULES_FILE}:${lineno}: proto '${proto}' takes no port (use -)" >&2; exit 1 ;;
+					*) echo "${rf}:${lineno}: proto '${proto}' takes no port (use -)" >&2; exit 1 ;;
 				esac
 				;;
 			*)
-				echo "${RULES_FILE}:${lineno}: bad proto '${proto}' (tcp|udp|sctp|all|icmp|icmpv6|esp|ah|gre)" >&2
+				echo "${rf}:${lineno}: bad proto '${proto}' (tcp|udp|sctp|all|icmp|icmpv6|esp|ah|gre)" >&2
 				exit 1
 				;;
 		esac
 		if [ -z "$geo" ]; then
-			echo "${RULES_FILE}:${lineno}: missing geo" >&2
+			echo "${rf}:${lineno}: missing target" >&2
 			exit 1
 		fi
 
@@ -233,7 +235,7 @@ parse_rules() {
 		else
 			geosan="$(sanitize_lower "$geo")"
 			if ! add_geo_members "$geosan" "$geo"; then
-				echo "${RULES_FILE}:${lineno}: bad target '${geo}' (country, region, IP, or IP/mask)" >&2
+				echo "${rf}:${lineno}: bad target '${geo}' (country, region, IP, IP/mask, or group)" >&2
 				exit 1
 			fi
 		fi
@@ -244,10 +246,27 @@ parse_rules() {
 		else
 			emit_norm "$action" "$hook" "$side" "$proto" "$port" "$geosan"
 		fi
-	done < "$RULES_FILE"
+	done < "$rf"
+}
+
+parse_rules() {
+	: > "$RULES_NORM"
+	: > "$GEO_TOKENS"
+	: > "$NEEDED_CC"
+
+	# rules.conf first (if present), then rules.d/*.conf in sorted filename order.
+	if [ -r "$RULES_FILE" ]; then
+		parse_rules_file "$RULES_FILE"
+	fi
+	if [ -d "$RULES_DIR" ]; then
+		for rf in "$RULES_DIR"/*.conf; do
+			[ -r "$rf" ] || continue
+			parse_rules_file "$rf"
+		done
+	fi
 
 	if [ ! -s "$RULES_NORM" ]; then
-		echo "No rules defined in ${RULES_FILE}." >&2
+		echo "No rules found in ${RULES_FILE} or ${RULES_DIR}/*.conf" >&2
 		exit 1
 	fi
 

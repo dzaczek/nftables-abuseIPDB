@@ -13,7 +13,7 @@
 #              country code (pl), region name (europe),
 #              literal IPv4/IPv6 address (203.0.113.5, 2001:db8::1),
 #              IPv4/IPv6 with mask (10.0.0.0/8, 2001:db8::/32),
-#              a named GROUP_<NAME> from abeiplinux.conf (used as its lowercase
+#              a named GROUP_<NAME> from config (used as its lowercase
 #                name, e.g. office),
 #            or the single word "any".
 #
@@ -30,10 +30,10 @@
 #     so inbound is permitted only as a response to a request unless an
 #     "allow in" rule opens the port for new connections. To allow a service
 #     outbound and let its replies back in, write only an "allow out" rule.
-#   - The whitelist (abeiplinux.conf) and the AbuseIPDB blacklist apply on top,
+#   - The whitelist (config) and the AbuseIPDB blacklist apply on top,
 #     on every managed port.
 #
-# Regions are defined in abeiplinux.conf via REGION_<NAME> variables. Built-in:
+# Regions are defined in config via REGION_<NAME> variables. Built-in:
 # europe, north_america, caribbean, south_america, middle_east, asia, africa,
 # oceania. Add your own freely.
 

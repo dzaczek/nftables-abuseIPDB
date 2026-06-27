@@ -60,7 +60,7 @@ blacklist is always dropped.
   (used by its lowercase name, e.g. `office`), or the single word `any`. These
   can be combined in one rule (`allow in tcp 80 198.51.100.0/24,de,office`).
 
-Define reusable address groups in `abeiplinux.conf` as `GROUP_<NAME>` variables;
+Define reusable address groups in `config` as `GROUP_<NAME>` variables;
 a group may itself mix IPs, subnets, country codes, and region names:
 
 ```sh
@@ -89,7 +89,7 @@ write only an `allow out` rule; the return packets flow automatically.
 
 `europe`, `north_america`, `caribbean`, `south_america`, `middle_east`, `asia`,
 `africa`, `oceania`. Override any of them or add your own `REGION_<NAME>` in
-`abeiplinux.conf`.
+`config`.
 
 ## Requirements
 
@@ -111,19 +111,36 @@ The installer:
 
 - installs `curl`, `nftables`, and `ca-certificates`,
 - copies the script to `/usr/local/sbin/abeiplinux-update`,
-- creates `/etc/abeiplinux/abeiplinux.conf` and `/etc/abeiplinux/rules.conf`,
+- creates `/etc/abeiplinux/config` and `/etc/abeiplinux/rules.conf`, plus empty
+  `rules.d/` and `groups.d/` directories for drop-in files,
 - installs `abeiplinux.service` and `abeiplinux.timer`,
 - enables the service at boot and the twice-daily timer.
 
 ## Configuration
 
-Two files live in `/etc/abeiplinux`:
+Everything lives in `/etc/abeiplinux`:
 
-- `rules.conf` - the per-port geo rules (see above).
-- `abeiplinux.conf` - the AbuseIPDB key, the whitelist, region definitions, and
-  the zone cache TTL.
+```text
+/etc/abeiplinux/
+  config            # settings: AbuseIPDB key, WHITELIST, ZONE_CACHE_HOURS, regions, groups
+  rules.conf        # rules (optional if you only use rules.d)
+  rules.d/*.conf    # rule fragments, included in sorted filename order
+  groups.d/*.conf   # GROUP_*/REGION_* definitions, sourced after config
+```
 
-After editing either file, apply the changes:
+`rules.conf` is read first, then every `rules.d/*.conf` in `LC_ALL=C` sorted
+filename order - use numeric prefixes (`10-ssh.conf`, `20-web.conf`,
+`90-default.conf`) to make the order obvious. Likewise `groups.d/*.conf` is
+sourced after `config`, in sorted order, so a later file can override a variable
+set by an earlier one (or by `config`).
+
+On file priority: within a chain the engine always evaluates in a fixed order -
+`whitelist -> AbuseIPDB -> deny -> allow -> deny-by-default` - regardless of
+which file a rule came from. So `deny` always beats `allow`, and two `allow`
+rules never conflict; the file order only affects how the rules read in
+`nft list`, not the filtering decision.
+
+After editing any file, apply the changes:
 
 ```sh
 sudo systemctl start abeiplinux.service
@@ -163,7 +180,7 @@ built in and need no configuration: `europe`, `north_america`, `caribbean`,
 `south_america`, `middle_east`, `asia`, `africa`, `oceania`.
 
 Override a built-in or add your own by defining a `REGION_<NAME>` variable in
-`abeiplinux.conf`; the name used in `rules.conf` is the lowercased part after
+`config`; the name used in `rules.conf` is the lowercased part after
 `REGION_`:
 
 ```sh

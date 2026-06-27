@@ -16,13 +16,14 @@ fi
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y curl nftables ca-certificates
 
-install -d -m 0755 /etc/abeiplinux /etc/nftables.d /var/lib/abeiplinux /var/lib/abeiplinux/zones /usr/local/sbin
+install -d -m 0755 /etc/abeiplinux /etc/abeiplinux/rules.d /etc/abeiplinux/groups.d \
+	/etc/nftables.d /var/lib/abeiplinux /var/lib/abeiplinux/zones /usr/local/sbin
 install -m 0755 "${BASE_DIR}/bin/abeiplinux-update" /usr/local/sbin/abeiplinux-update
 
-if [ ! -f /etc/abeiplinux/abeiplinux.conf ]; then
-	install -m 0600 "${BASE_DIR}/etc/abeiplinux.conf.example" /etc/abeiplinux/abeiplinux.conf
+if [ ! -f /etc/abeiplinux/config ]; then
+	install -m 0600 "${BASE_DIR}/etc/config.example" /etc/abeiplinux/config
 else
-	echo "Keeping existing /etc/abeiplinux/abeiplinux.conf"
+	echo "Keeping existing /etc/abeiplinux/config"
 fi
 
 if [ ! -f /etc/abeiplinux/rules.conf ]; then
@@ -39,6 +40,6 @@ systemctl enable abeiplinux.service
 systemctl enable --now abeiplinux.timer
 
 echo "Installed abeiplinux."
-echo "Edit /etc/abeiplinux/abeiplinux.conf (ABUSEIPDB_API_KEY, WHITELIST, regions)"
-echo "and /etc/abeiplinux/rules.conf (per-port geo rules), then run:"
+echo "Edit /etc/abeiplinux/config (ABUSEIPDB_API_KEY, WHITELIST, regions, groups)"
+echo "and /etc/abeiplinux/rules.conf or /etc/abeiplinux/rules.d/*.conf, then run:"
 echo "  systemctl start abeiplinux.service"
