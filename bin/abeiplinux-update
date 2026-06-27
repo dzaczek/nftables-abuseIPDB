@@ -1,0 +1,186 @@
+#!/bin/sh
+set -eu
+
+CONFIG_FILE="${CONFIG_FILE:-/etc/abeiplinux/abeiplinux.conf}"
+STATE_DIR="${STATE_DIR:-/var/lib/abeiplinux}"
+NFT_FILE="${NFT_FILE:-/etc/nftables.d/abeiplinux.nft}"
+TABLE_FAMILY="${TABLE_FAMILY:-inet}"
+TABLE_NAME="${TABLE_NAME:-abeiplinux_ssh}"
+CHAIN_NAME="${CHAIN_NAME:-input}"
+SSH_PORT="${SSH_PORT:-22}"
+ENABLE_EUROPE_ALLOWLIST="${ENABLE_EUROPE_ALLOWLIST:-yes}"
+COUNTRIES="${COUNTRIES:-ad al am at ax az ba be bg by ch cy cz de dk ee es fi fo fr gb ge gg gi gr hr hu ie im is it je li lt lu lv mc md me mk mt nl no pl pt ro rs ru se si sk sm tr ua va xk}"
+WHITELIST="${WHITELIST:-}"
+ABUSEIPDB_API_KEY="${ABUSEIPDB_API_KEY:-}"
+ABUSEIPDB_CONFIDENCE_MINIMUM="${ABUSEIPDB_CONFIDENCE_MINIMUM:-90}"
+ABUSEIPDB_LIMIT="${ABUSEIPDB_LIMIT:-10000}"
+ABUSEIPDB_DAYS="${ABUSEIPDB_DAYS:-30}"
+ABUSEIPDB_URL="${ABUSEIPDB_URL:-https://api.abuseipdb.com/api/v2/blacklist}"
+
+TMP_DIR="$(mktemp -d)"
+
+cleanup() {
+	rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+if [ "$(id -u)" -ne 0 ]; then
+	echo "Run as root." >&2
+	exit 1
+fi
+
+if [ -r "$CONFIG_FILE" ]; then
+	. "$CONFIG_FILE"
+fi
+
+mkdir -p "$STATE_DIR" "$(dirname "$NFT_FILE")"
+
+fetch_europe() {
+	: > "${TMP_DIR}/europe4.raw"
+	: > "${TMP_DIR}/europe6.raw"
+
+	for cc in $COUNTRIES; do
+		curl -fsSL "https://www.ipdeny.com/ipblocks/data/aggregated/${cc}-aggregated.zone" >> "${TMP_DIR}/europe4.raw" 2>/dev/null || true
+		curl -fsSL "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${cc}-aggregated.zone" >> "${TMP_DIR}/europe6.raw" 2>/dev/null || true
+	done
+
+	sort -u "${TMP_DIR}/europe4.raw" | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$' > "${TMP_DIR}/europe4.set" || true
+	sort -u "${TMP_DIR}/europe6.raw" | grep -Ei '^[0-9a-f:]+/[0-9]{1,3}$' > "${TMP_DIR}/europe6.set" || true
+
+	if [ "$(wc -l < "${TMP_DIR}/europe4.set")" -lt 1000 ]; then
+		echo "Too few IPv4 Europe prefixes downloaded." >&2
+		exit 1
+	fi
+
+	if [ "$(wc -l < "${TMP_DIR}/europe6.set")" -lt 100 ]; then
+		echo "Too few IPv6 Europe prefixes downloaded." >&2
+		exit 1
+	fi
+}
+
+fetch_abuseipdb() {
+	: > "${TMP_DIR}/abuse4.set"
+	: > "${TMP_DIR}/abuse6.set"
+
+	if [ -z "${ABUSEIPDB_API_KEY:-}" ]; then
+		echo "ABUSEIPDB_API_KEY is not set in ${CONFIG_FILE}; AbuseIPDB sets will be empty." >&2
+		return 0
+	fi
+
+	if ! curl -fsS --get "$ABUSEIPDB_URL" \
+		--data-urlencode "confidenceMinimum=${ABUSEIPDB_CONFIDENCE_MINIMUM}" \
+		--data-urlencode "limit=${ABUSEIPDB_LIMIT}" \
+		--data-urlencode "days=${ABUSEIPDB_DAYS}" \
+		--data-urlencode "plaintext=true" \
+		-H "Key: ${ABUSEIPDB_API_KEY}" \
+		-H "Accept: text/plain" > "${TMP_DIR}/abuse.raw"; then
+		echo "AbuseIPDB download failed; keeping AbuseIPDB sets empty for this run." >&2
+		return 0
+	fi
+
+	sort -u "${TMP_DIR}/abuse.raw" | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' > "${TMP_DIR}/abuse4.set" || true
+	sort -u "${TMP_DIR}/abuse.raw" | grep -Ei '^[0-9a-f:]+(/[0-9]{1,3})?$' > "${TMP_DIR}/abuse6.set" || true
+}
+
+build_whitelist() {
+	: > "${TMP_DIR}/allow4.raw"
+	: > "${TMP_DIR}/allow6.raw"
+
+	for entry in $WHITELIST; do
+		case "$entry" in
+			*:*) echo "$entry" >> "${TMP_DIR}/allow6.raw" ;;
+			*)   echo "$entry" >> "${TMP_DIR}/allow4.raw" ;;
+		esac
+	done
+
+	sort -u "${TMP_DIR}/allow4.raw" | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' > "${TMP_DIR}/allow4.set" || true
+	sort -u "${TMP_DIR}/allow6.raw" | grep -Ei '^[0-9a-f:]+(/[0-9]{1,3})?$' > "${TMP_DIR}/allow6.set" || true
+}
+
+write_set_elements() {
+	file="$1"
+	if [ -s "$file" ]; then
+		awk 'BEGIN{first=1} { if (!first) printf ",\n"; first=0; printf "\t\t\t%s", $0 } END{ printf "\n" }' "$file"
+	fi
+}
+
+write_addr_set() {
+	name="$1"
+	type="$2"
+	file="$3"
+
+	printf '\tset %s {\n\t\ttype %s\n\t\tflags interval\n' "$name" "$type"
+	if [ -s "$file" ]; then
+		printf '\t\telements = {\n'
+		write_set_elements "$file"
+		printf '\t\t}\n'
+	fi
+	printf '\t}\n\n'
+}
+
+write_rules() {
+	if [ "$ENABLE_EUROPE_ALLOWLIST" = "yes" ]; then
+		fetch_europe
+	else
+		: > "${TMP_DIR}/europe4.set"
+		: > "${TMP_DIR}/europe6.set"
+	fi
+
+	fetch_abuseipdb
+	build_whitelist
+
+	{
+		# Atomic replace: create the table if missing, delete it, then rebuild
+		# it from scratch. The whole file is loaded with a single nft -f call,
+		# so there is no window in which the rules are absent.
+		printf 'table %s %s\n' "$TABLE_FAMILY" "$TABLE_NAME"
+		printf 'delete table %s %s\n' "$TABLE_FAMILY" "$TABLE_NAME"
+		printf 'table %s %s {\n' "$TABLE_FAMILY" "$TABLE_NAME"
+		write_addr_set "allow4" "ipv4_addr" "${TMP_DIR}/allow4.set"
+		write_addr_set "allow6" "ipv6_addr" "${TMP_DIR}/allow6.set"
+		write_addr_set "europe4" "ipv4_addr" "${TMP_DIR}/europe4.set"
+		write_addr_set "europe6" "ipv6_addr" "${TMP_DIR}/europe6.set"
+		write_addr_set "abuse4" "ipv4_addr" "${TMP_DIR}/abuse4.set"
+		write_addr_set "abuse6" "ipv6_addr" "${TMP_DIR}/abuse6.set"
+		printf '\tchain %s {\n' "$CHAIN_NAME"
+		printf '\t\ttype filter hook input priority -100; policy accept;\n'
+		printf '\t\tct state established,related accept\n'
+		if [ -s "${TMP_DIR}/allow4.set" ]; then
+			printf '\t\ttcp dport %s ip saddr @allow4 accept\n' "$SSH_PORT"
+		fi
+		if [ -s "${TMP_DIR}/allow6.set" ]; then
+			printf '\t\ttcp dport %s ip6 saddr @allow6 accept\n' "$SSH_PORT"
+		fi
+		printf '\t\ttcp dport %s ip saddr @abuse4 drop\n' "$SSH_PORT"
+		printf '\t\ttcp dport %s ip6 saddr @abuse6 drop\n' "$SSH_PORT"
+		if [ "$ENABLE_EUROPE_ALLOWLIST" = "yes" ]; then
+			printf '\t\ttcp dport %s ip saddr @europe4 accept\n' "$SSH_PORT"
+			printf '\t\ttcp dport %s ip6 saddr @europe6 accept\n' "$SSH_PORT"
+			printf '\t\ttcp dport %s drop\n' "$SSH_PORT"
+		fi
+		printf '\t}\n'
+		printf '}\n'
+	} > "${TMP_DIR}/abeiplinux.nft"
+}
+
+write_rules
+nft -c -f "${TMP_DIR}/abeiplinux.nft"
+install -m 0644 "${TMP_DIR}/abeiplinux.nft" "$NFT_FILE"
+nft -f "$NFT_FILE"
+
+install -m 0644 "${TMP_DIR}/allow4.set" "${STATE_DIR}/allow4.set"
+install -m 0644 "${TMP_DIR}/allow6.set" "${STATE_DIR}/allow6.set"
+install -m 0644 "${TMP_DIR}/europe4.set" "${STATE_DIR}/europe4.set"
+install -m 0644 "${TMP_DIR}/europe6.set" "${STATE_DIR}/europe6.set"
+install -m 0644 "${TMP_DIR}/abuse4.set" "${STATE_DIR}/abuse4.set"
+install -m 0644 "${TMP_DIR}/abuse6.set" "${STATE_DIR}/abuse6.set"
+
+printf 'Loaded %s/%s: allow4=%s allow6=%s europe4=%s europe6=%s abuse4=%s abuse6=%s ssh_port=%s europe_allowlist=%s\n' \
+	"$TABLE_FAMILY" "$TABLE_NAME" \
+	"$(wc -l < "${TMP_DIR}/allow4.set")" \
+	"$(wc -l < "${TMP_DIR}/allow6.set")" \
+	"$(wc -l < "${TMP_DIR}/europe4.set")" \
+	"$(wc -l < "${TMP_DIR}/europe6.set")" \
+	"$(wc -l < "${TMP_DIR}/abuse4.set")" \
+	"$(wc -l < "${TMP_DIR}/abuse6.set")" \
+	"$SSH_PORT" "$ENABLE_EUROPE_ALLOWLIST"

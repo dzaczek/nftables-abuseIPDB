@@ -1,0 +1,11 @@
+[Unit]
+Description=Update nftables SSH rules from AbuseIPDB and Europe IP ranges
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/abeiplinux-update
+
+[Install]
+WantedBy=multi-user.target
