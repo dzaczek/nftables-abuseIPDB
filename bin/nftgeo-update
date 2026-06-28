@@ -175,13 +175,38 @@ valid_port() {
 
 l4_match() {
 	# $1 proto, $2 port, $3 family (4|6). Echo the protocol/port match clause for
-	# that family, or nothing if the protocol does not apply to that family.
+	# that family, the literal "any" when the rule should match every
+	# protocol/port on that family, or nothing if the protocol does not apply to
+	# that family.
 	case "$1" in
+		any)          printf 'any' ;;
 		tcp|udp|sctp) printf '%s dport %s' "$1" "$2" ;;
 		esp|ah|gre)   printf 'meta l4proto %s' "$1" ;;
 		icmp)   [ "$3" = 4 ] && printf 'meta l4proto icmp' || true ;;
 		icmpv6) [ "$3" = 6 ] && printf 'meta l4proto icmpv6' || true ;;
 	esac
+}
+
+set_name() {
+	# $1 geosan, $2 family (4|6). Echo the nftables set name for the target: the
+	# AbuseIPDB blacklist for the reserved "abuse" target, otherwise the geo set.
+	if [ "$1" = abuse ]; then
+		printf 'abuse%s' "$2"
+	else
+		printf 'g_%s%s' "$1" "$2"
+	fi
+}
+
+emit_set_match() {
+	# $1 l4 match (from l4_match: a clause, "any", or empty), $2 ipver (ip|ip6),
+	# $3 address side (saddr|daddr), $4 set name, $5 verdict (accept|drop). Emits
+	# nothing when the l4 match is empty (protocol absent on this family).
+	[ -n "$1" ] || return 0
+	if [ "$1" = any ]; then
+		printf '\t\t%s %s @%s counter %s\n' "$2" "$3" "$4" "$5"
+	else
+		printf '\t\t%s %s %s @%s counter %s\n' "$1" "$2" "$3" "$4" "$5"
+	fi
 }
 
 emit_norm() {
@@ -216,14 +241,14 @@ parse_rules_file() {
 					exit 1
 				fi
 				;;
-			icmp|icmpv6|esp|ah|gre)
+			any|icmp|icmpv6|esp|ah|gre)
 				case "$port" in
 					-|any) port=- ;;
 					*) echo "${rf}:${lineno}: proto '${proto}' takes no port (use -)" >&2; exit 1 ;;
 				esac
 				;;
 			*)
-				echo "${rf}:${lineno}: bad proto '${proto}' (tcp|udp|sctp|all|icmp|icmpv6|esp|ah|gre)" >&2
+				echo "${rf}:${lineno}: bad proto '${proto}' (tcp|udp|sctp|all|any|icmp|icmpv6|esp|ah|gre)" >&2
 				exit 1
 				;;
 		esac
@@ -234,10 +259,18 @@ parse_rules_file() {
 
 		if [ "$geo" = "any" ]; then
 			geosan="any"
+		elif [ "$geo" = "abuse" ]; then
+			# Reserved target: the AbuseIPDB blacklist. No address set is built
+			# for it; it is populated by fetch_abuseipdb into @abuse4/@abuse6.
+			if [ "$action" != "deny" ]; then
+				echo "${rf}:${lineno}: target 'abuse' only valid with 'deny'" >&2
+				exit 1
+			fi
+			geosan="abuse"
 		else
 			geosan="$(sanitize_lower "$geo")"
 			if ! add_geo_members "$geosan" "$geo"; then
-				echo "${rf}:${lineno}: bad target '${geo}' (country, region, IP, IP/mask, or group)" >&2
+				echo "${rf}:${lineno}: bad target '${geo}' (country, region, IP, IP/mask, group, any, or abuse)" >&2
 				exit 1
 			fi
 		fi
@@ -419,26 +452,12 @@ emit_chain() {
 		[ -s "${TMP_DIR}/whitelist6.set" ] && printf '\t\tip6 %s @whitelist6 counter accept\n' "$s"
 	done
 
-	# AbuseIPDB blacklist drop on every managed protocol/port. One rule per
-	# unique proto/port (single ports and ranges may overlap, which an anonymous
-	# set would reject).
-	for pr in $(awk -v h="$hook" '$2==h{print $4}' "$RULES_NORM" | sort -u); do
-		for port in $(awk -v h="$hook" -v p="$pr" '$2==h && $4==p{print $5}' "$RULES_NORM" | sort -u); do
-			m4="$(l4_match "$pr" "$port" 4)"
-			m6="$(l4_match "$pr" "$port" 6)"
-			for s in $sides; do
-				[ -n "$m4" ] && printf '\t\t%s ip %s @abuse4 counter drop\n' "$m4" "$s"
-				[ -n "$m6" ] && printf '\t\t%s ip6 %s @abuse6 counter drop\n' "$m6" "$s"
-			done
-		done
-	done
-
-	# Explicit geo blocks, before the allows.
+	# Explicit blocks, before the allows. Includes the reserved "abuse" target,
+	# which drops the AbuseIPDB blacklist on exactly the proto/port/direction the
+	# rule names (use "deny <dir> any - abuse" to block every protocol and port).
 	awk -v h="$hook" '$1=="deny" && $2==h' "$RULES_NORM" | while read -r _a _h side proto port geosan; do
-		m4="$(l4_match "$proto" "$port" 4)"
-		m6="$(l4_match "$proto" "$port" 6)"
-		[ -n "$m4" ] && printf '\t\t%s ip %s @g_%s4 counter drop\n' "$m4" "$side" "$geosan"
-		[ -n "$m6" ] && printf '\t\t%s ip6 %s @g_%s6 counter drop\n' "$m6" "$side" "$geosan"
+		emit_set_match "$(l4_match "$proto" "$port" 4)" ip  "$side" "$(set_name "$geosan" 4)" drop
+		emit_set_match "$(l4_match "$proto" "$port" 6)" ip6 "$side" "$(set_name "$geosan" 6)" drop
 	done
 
 	# Geo allows.
@@ -451,11 +470,11 @@ emit_chain() {
 				[ -n "$m" ] || continue
 				case "$printed" in *"|${m}|"*) continue ;; esac
 				printed="${printed}|${m}|"
-				printf '\t\t%s counter accept\n' "$m"
+				[ "$m" = any ] && printf '\t\tcounter accept\n' || printf '\t\t%s counter accept\n' "$m"
 			done
 		else
-			[ -n "$m4" ] && printf '\t\t%s ip %s @g_%s4 counter accept\n' "$m4" "$side" "$geosan"
-			[ -n "$m6" ] && printf '\t\t%s ip6 %s @g_%s6 counter accept\n' "$m6" "$side" "$geosan"
+			emit_set_match "$m4" ip  "$side" "$(set_name "$geosan" 4)" accept
+			emit_set_match "$m6" ip6 "$side" "$(set_name "$geosan" 6)" accept
 		fi
 	done
 
@@ -469,7 +488,7 @@ emit_chain() {
 				[ -n "$m" ] || continue
 				case "$printed" in *"|${m}|"*) continue ;; esac
 				printed="${printed}|${m}|"
-				printf '\t\t%s counter drop\n' "$m"
+				[ "$m" = any ] && printf '\t\tcounter drop\n' || printf '\t\t%s counter drop\n' "$m"
 			done
 		done
 	done
@@ -506,7 +525,14 @@ generate() {
 parse_rules
 ensure_zones
 build_geo_sets
-fetch_abuseipdb
+# Only hit the AbuseIPDB API when a rule actually targets "abuse"; otherwise the
+# sets stay empty (their files are created here so the rest of the run still has
+# them to read and install).
+: > "${TMP_DIR}/abuse4.set"
+: > "${TMP_DIR}/abuse6.set"
+if awk '$6=="abuse"{found=1} END{exit !found}' "$RULES_NORM"; then
+	fetch_abuseipdb
+fi
 build_whitelist
 generate
 

@@ -1,6 +1,7 @@
 # AbuseIPDB API key. Create one in the AbuseIPDB account panel.
-# Without this key, nftgeo still builds the geo rules, but the AbuseIPDB
-# sets stay empty.
+# The blacklist is only downloaded and applied when a rule targets "abuse"
+# (e.g. "deny in any - abuse" in rules.conf). Without this key, nftgeo still
+# builds the geo rules, but any abuse rule matches an empty set.
 ABUSEIPDB_API_KEY=""
 
 # AbuseIPDB blacklist filters.

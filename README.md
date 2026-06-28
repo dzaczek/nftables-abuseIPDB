@@ -9,7 +9,8 @@ allowed, and the tool builds and maintains the `nftables` rules for you:
 - match by country, region, or a literal IPv4/IPv6 address or subnet,
 - tcp, udp, sctp, icmp, icmpv6, esp, ah, and gre, with single ports or ranges,
 - stateful: replies to your own requests are always allowed,
-- blocks addresses from the AbuseIPDB blacklist on every managed port,
+- blocks the AbuseIPDB blacklist where you ask it to, with the same
+  direction/protocol/port granularity as any other rule,
 - always allows a configurable whitelist of trusted IPs,
 - a counter on every rule, so `nft list` shows per-rule packet/byte totals,
 - downloads only the country zones your rules actually use, with a local cache,
@@ -26,9 +27,11 @@ allow      in       tcp    22     europe
 allow      in       tcp    22     203.0.113.5
 allow      in       icmp   -      any
 deny       in       tcp    22     ru
+deny       in       any    -      abuse
 allow      in       all    5060   de
 allow      out      udp    53     any
 allow      fwd-in   esp    -      europe
+deny       fwd-in   any    -      abuse
 ```
 
 Two simple guarantees:
@@ -37,8 +40,15 @@ Two simple guarantees:
   default**: only the listed geos get through, everyone else is dropped.
 - A port/direction you never mention is **left untouched**.
 
-On top of every managed port, the whitelist always wins and the AbuseIPDB
-blacklist is always dropped.
+On top of every managed port, the whitelist always wins. The AbuseIPDB
+blacklist is opt-in: it is dropped only where you write a `deny ... abuse`
+rule, so you choose its exact scope (see below).
+
+> **Avoid locking yourself out.** The moment you add an `allow in tcp 22 ...`
+> rule, port 22 is closed to every source outside that target - including the
+> machine you are connected from. Put your own admin IP in `WHITELIST` (in
+> `config`) *before* you add such a rule; the whitelist is evaluated first and
+> bypasses both the geo deny-by-default and the AbuseIPDB blacklist.
 
 ### Fields
 
@@ -50,15 +60,18 @@ blacklist is always dropped.
   - `fwd-in` - routed/forwarded traffic, matched by source country,
   - `fwd-out` - routed/forwarded traffic, matched by destination country.
 - `proto` - port-based: `tcp`, `udp`, `sctp`, or `all` (tcp and udp). Port-less:
-  `icmp` (IPv4 only), `icmpv6` (IPv6 only), `esp`, `ah`, `gre`.
+  `icmp` (IPv4 only), `icmpv6` (IPv6 only), `esp`, `ah`, `gre`, or `any` (every
+  protocol and port).
 - `port` - a single port (`22`) or a range (`5060-5070`); use `-` for port-less
-  protocols.
+  protocols (including `any`).
 - `target` - what the source/destination address is matched against: any mix of,
   comma-separated, country codes (`pl`), region names (`europe`), literal IPv4/
   IPv6 addresses (`203.0.113.5`, `2001:db8::1`), IPv4/IPv6 with a mask
   (`10.0.0.0/8`, `2001:db8::/32`), a named `GROUP_<NAME>` list from the config
-  (used by its lowercase name, e.g. `office`), or the single word `any`. These
-  can be combined in one rule (`allow in tcp 80 198.51.100.0/24,de,office`).
+  (used by its lowercase name, e.g. `office`), or one of the reserved words `any`
+  (every address) and `abuse` (the AbuseIPDB blacklist, `deny` only). The mixable
+  targets can be combined in one rule
+  (`allow in tcp 80 198.51.100.0/24,de,office`); `any` and `abuse` stand alone.
 
 Define reusable address groups in `config` as `GROUP_<NAME>` variables;
 a group may itself mix IPs, subnets, country codes, and region names:
@@ -135,10 +148,10 @@ sourced after `config`, in sorted order, so a later file can override a variable
 set by an earlier one (or by `config`).
 
 On file priority: within a chain the engine always evaluates in a fixed order -
-`whitelist -> AbuseIPDB -> deny -> allow -> deny-by-default` - regardless of
-which file a rule came from. So `deny` always beats `allow`, and two `allow`
-rules never conflict; the file order only affects how the rules read in
-`nft list`, not the filtering decision.
+`whitelist -> deny -> allow -> deny-by-default` - regardless of which file a rule
+came from (`deny ... abuse` rules are part of the `deny` step). So `deny` always
+beats `allow`, and two `allow` rules never conflict; the file order only affects
+how the rules read in `nft list`, not the filtering decision.
 
 After editing any file, apply the changes:
 
@@ -159,6 +172,21 @@ ABUSEIPDB_DAYS="30"
 - `ABUSEIPDB_CONFIDENCE_MINIMUM` - minimum abuse confidence score.
 - `ABUSEIPDB_LIMIT` - maximum number of entries to download.
 - `ABUSEIPDB_DAYS` - how many days of AbuseIPDB history to consider.
+
+The blacklist is applied through the reserved `abuse` target in `rules.conf`,
+and only downloaded when at least one rule uses it. You decide its scope exactly
+like any other rule:
+
+```text
+deny in  any -       abuse   # block every protocol/port inbound from abuse IPs
+deny in  tcp 22      abuse   # block abuse IPs only on inbound SSH
+deny in  all 1-65535 abuse   # block abuse IPs on every tcp+udp port inbound
+deny out tcp 443     abuse   # block outbound HTTPS to abuse IPs
+```
+
+`abuse` is `deny`-only and stands alone (it cannot be combined with countries or
+IPs in the same rule). It is dropped after the whitelist, so whitelisted
+addresses are never blocked by it.
 
 ### Whitelist (always-allow IPs)
 
@@ -230,10 +258,9 @@ chain input {
     ct state established,related counter accept            # replies always allowed
 
     ip saddr @whitelist4 counter accept                    # whitelist wins first
-    meta l4proto icmp ip saddr @abuse4 counter drop        # AbuseIPDB, per proto/port
-    tcp dport 22 ip saddr @abuse4 counter drop
 
     tcp dport 22 ip saddr @g_ru4 counter drop              # explicit deny
+    ip saddr @abuse4 counter drop                          # deny in any - abuse
 
     tcp dport 22 ip saddr @g_europe4 counter accept        # geo allow (source)
     meta l4proto icmp counter accept                       # icmp "any"
@@ -246,8 +273,8 @@ chain forward {
 
     ip saddr @whitelist4 counter accept
     ip daddr @whitelist4 counter accept                    # both sides for routed traffic
-    meta l4proto esp ip saddr @abuse4 counter drop
-    meta l4proto esp ip daddr @abuse4 counter drop
+
+    ip saddr @abuse4 counter drop                          # deny fwd-in any - abuse
 
     meta l4proto esp ip saddr @g_europe4 counter accept    # geo allow (source)
     meta l4proto esp counter drop                          # deny-by-default
@@ -256,8 +283,8 @@ chain forward {
 
 The `allow in all 5060 de` and `allow out udp 53 any` rules add the rest (a udp
 output chain and tcp+udp entries for 5060); they are left out above for brevity.
-Note the per-rule `counter` and that AbuseIPDB / deny-by-default emit one rule
-per protocol and port (so an overlapping single port and range never collide).
+Note the per-rule `counter` and that deny-by-default emits one rule per protocol
+and port (so an overlapping single port and range never collide).
 
 Only chains for the directions you actually use are emitted. The table is
 replaced atomically: the generated file recreates the table in a single `nft -f`

@@ -8,6 +8,7 @@
 #            fwd-out (routed/forwarded, matches the destination address)
 #   proto  : tcp | udp | sctp | all   (port-based; all = tcp and udp)
 #            icmp | icmpv6 | esp | ah | gre   (no port; use "-" in the port field)
+#            any   (every protocol and port; use "-" in the port field)
 #   port   : single port (22) or a range (5060-5070); "-" for port-less protocols
 #   target : what to match the address against - any mix of, comma-separated:
 #              country code (pl), region name (europe),
@@ -15,7 +16,10 @@
 #              IPv4/IPv6 with mask (10.0.0.0/8, 2001:db8::/32),
 #              a named GROUP_<NAME> from config (used as its lowercase
 #                name, e.g. office),
-#            or the single word "any".
+#            or one of the reserved words:
+#              any   - every address
+#              abuse - the AbuseIPDB blacklist (only with "deny"; needs an
+#                      ABUSEIPDB_API_KEY in config to be non-empty)
 #
 # Every generated rule carries a counter, so "nft list table inet nftgeo"
 # shows per-rule packet and byte totals.
@@ -30,14 +34,22 @@
 #     so inbound is permitted only as a response to a request unless an
 #     "allow in" rule opens the port for new connections. To allow a service
 #     outbound and let its replies back in, write only an "allow out" rule.
-#   - The whitelist (config) and the AbuseIPDB blacklist apply on top,
-#     on every managed port.
+#   - The whitelist (config) applies on top, on every managed port.
+#   - The AbuseIPDB blacklist is opt-in: it only drops where you write a
+#     "deny ... abuse" rule, so you choose the exact direction, protocol, and
+#     port(s) it covers - or "deny <dir> any - abuse" to block everything.
+#     The drops are evaluated before any "allow", and after the whitelist (so
+#     whitelisted addresses are never caught by it). Each abuse rule carries a
+#     counter like any other.
 #
 # Regions are defined in config via REGION_<NAME> variables. Built-in:
 # europe, north_america, caribbean, south_america, middle_east, asia, africa,
 # oceania. Add your own freely.
 
 # Allow inbound SSH from Europe only.
+# WARNING: this closes port 22 to every source outside Europe, including your
+# own admin host if it is elsewhere. Add your admin IP to WHITELIST in config
+# first - the whitelist is checked before this rule and prevents a lockout.
 allow in tcp 22 europe
 
 # Examples - uncomment and adapt:
@@ -60,3 +72,10 @@ allow in tcp 22 europe
 # deny  in      tcp 22        192.0.2.7          # block one bad IP on SSH
 # allow in      tcp 22        office             # a GROUP_OFFICE list from the config
 # allow in      tcp 443       office,europe      # mix a group with a region
+#
+# AbuseIPDB blacklist (needs ABUSEIPDB_API_KEY in config):
+# deny  in      any -         abuse     # block all inbound traffic from abuse IPs
+# deny  in      tcp 22        abuse     # block abuse IPs only on inbound SSH
+# deny  in      all 1-65535   abuse     # block abuse IPs on every tcp+udp port in
+# deny  out     tcp 443       abuse     # block outbound HTTPS to abuse IPs
+# deny  fwd-in  any -         abuse     # gateway: drop forwarded traffic from abuse IPs
